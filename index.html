@@ -1,0 +1,1023 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Clinic Analytics Pipeline</title>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=Instrument+Serif:ital@0;1&family=DM+Sans:wght@300;400;500;600&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --bg: #f7f5f0;
+    --surface: #ffffff;
+    --surface2: #f0ede6;
+    --border: rgba(0,0,0,0.08);
+    --border2: rgba(0,0,0,0.15);
+    --text: #1a1814;
+    --muted: #8a8278;
+    --accent: #1d4ed8;
+    --accent2: #0f766e;
+    --amber: #b45309;
+    --red: #be123c;
+    --mono: 'IBM Plex Mono', monospace;
+    --serif: 'Instrument Serif', serif;
+    --sans: 'DM Sans', sans-serif;
+  }
+
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: var(--sans);
+    font-size: 15px;
+    line-height: 1.7;
+  }
+
+  /* Subtle dot grid */
+  body::before {
+    content: '';
+    position: fixed;
+    inset: 0;
+    background-image: radial-gradient(circle, rgba(0,0,0,0.06) 1px, transparent 1px);
+    background-size: 24px 24px;
+    pointer-events: none;
+    z-index: 0;
+  }
+
+  .wrap { max-width: 980px; margin: 0 auto; padding: 0 2rem; position: relative; z-index: 1; }
+
+  /* ── HEADER ── */
+  header { padding: 72px 0 56px; border-bottom: 1px solid var(--border2); }
+
+  .eyebrow {
+    font-family: var(--mono);
+    font-size: 11px;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: var(--muted);
+    margin-bottom: 20px;
+    display: flex;
+    align-items: center;
+    gap: 12px;
+  }
+  .eyebrow::before {
+    content: '';
+    display: inline-block;
+    width: 32px;
+    height: 1px;
+    background: var(--muted);
+  }
+
+  h1 {
+    font-family: var(--serif);
+    font-size: clamp(2.4rem, 5vw, 3.8rem);
+    font-weight: 400;
+    line-height: 1.1;
+    letter-spacing: -0.02em;
+    margin-bottom: 8px;
+  }
+
+  h1 em {
+    font-style: italic;
+    color: var(--accent);
+  }
+
+  .hero-sub {
+    font-size: 17px;
+    color: var(--muted);
+    max-width: 580px;
+    margin: 20px 0 36px;
+    line-height: 1.8;
+  }
+
+  .kpi-row {
+    display: flex;
+    gap: 0;
+    border: 1px solid var(--border2);
+    border-radius: 12px;
+    overflow: hidden;
+    background: var(--surface);
+    max-width: 680px;
+  }
+
+  .kpi {
+    flex: 1;
+    padding: 20px 24px;
+    border-right: 1px solid var(--border2);
+  }
+  .kpi:last-child { border-right: none; }
+
+  .kpi-n {
+    font-family: var(--mono);
+    font-size: 26px;
+    font-weight: 600;
+    color: var(--text);
+    display: block;
+    letter-spacing: -0.02em;
+  }
+  .kpi-n span { color: var(--accent); }
+  .kpi-l { font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.07em; margin-top: 2px; }
+
+  /* ── SECTIONS ── */
+  section { padding: 60px 0; border-bottom: 1px solid var(--border); }
+
+  .section-num {
+    font-family: var(--mono);
+    font-size: 11px;
+    color: var(--muted);
+    letter-spacing: 0.1em;
+    margin-bottom: 8px;
+  }
+
+  h2 {
+    font-family: var(--serif);
+    font-size: 2rem;
+    font-weight: 400;
+    letter-spacing: -0.015em;
+    margin-bottom: 6px;
+  }
+
+  .section-desc {
+    color: var(--muted);
+    font-size: 14px;
+    margin-bottom: 36px;
+    max-width: 560px;
+  }
+
+  /* ── ARCHITECTURE ── */
+  .arch-wrap {
+    background: var(--surface);
+    border: 1px solid var(--border2);
+    border-radius: 16px;
+    padding: 36px;
+    overflow-x: auto;
+  }
+
+  .arch-title {
+    font-family: var(--mono);
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.1em;
+    color: var(--muted);
+    margin-bottom: 28px;
+  }
+
+  /* Source layer */
+  .layer {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    margin-bottom: 12px;
+    flex-wrap: wrap;
+  }
+
+  .layer-label {
+    font-family: var(--mono);
+    font-size: 10px;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: var(--muted);
+    min-width: 80px;
+    flex-shrink: 0;
+  }
+
+  .source-nodes { display: flex; gap: 8px; flex-wrap: wrap; }
+
+  .node {
+    border-radius: 8px;
+    padding: 8px 14px;
+    font-family: var(--mono);
+    font-size: 11px;
+    white-space: nowrap;
+    border: 1px solid;
+  }
+
+  .node-blue { background: #eff6ff; border-color: #bfdbfe; color: #1d4ed8; }
+  .node-teal { background: #f0fdfa; border-color: #99f6e4; color: #0f766e; }
+  .node-amber { background: #fffbeb; border-color: #fde68a; color: #b45309; }
+  .node-red { background: #fff1f2; border-color: #fecdd3; color: #be123c; }
+  .node-gray { background: #f8f7f4; border-color: #e2e0db; color: #6b7280; }
+  .node-dark { background: var(--text); border-color: var(--text); color: #fff; }
+
+  .arch-arrow {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 4px 0 4px 92px;
+    color: var(--muted);
+    font-size: 13px;
+  }
+
+  .arch-arrow::before {
+    content: '';
+    display: block;
+    width: 1px;
+    height: 20px;
+    background: var(--border2);
+    margin-left: 4px;
+  }
+
+  .arch-connector {
+    display: flex;
+    align-items: center;
+    gap: 0;
+    padding-left: 92px;
+    margin-bottom: 4px;
+  }
+
+  /* ── PIPELINE CARDS ── */
+  .pipeline-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 16px;
+  }
+  @media (max-width: 640px) { .pipeline-grid { grid-template-columns: 1fr; } }
+
+  .pipe-card {
+    background: var(--surface);
+    border: 1px solid var(--border2);
+    border-radius: 14px;
+    overflow: hidden;
+    transition: border-color 0.15s;
+  }
+  .pipe-card:hover { border-color: rgba(0,0,0,0.25); }
+
+  .pipe-header {
+    padding: 20px 22px 16px;
+    border-bottom: 1px solid var(--border);
+    display: flex;
+    align-items: flex-start;
+    gap: 14px;
+  }
+
+  .pipe-icon {
+    width: 36px; height: 36px;
+    border-radius: 8px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 16px;
+    flex-shrink: 0;
+    border: 1px solid var(--border2);
+  }
+
+  .pipe-name { font-size: 13px; font-weight: 600; margin-bottom: 3px; }
+  .pipe-sub { font-size: 11px; color: var(--muted); line-height: 1.5; }
+
+  .pipe-body { padding: 18px 22px; }
+
+  .flow-steps {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    margin-bottom: 14px;
+  }
+
+  .flow-step {
+    display: flex;
+    align-items: baseline;
+    gap: 10px;
+    font-size: 12px;
+  }
+
+  .step-n {
+    font-family: var(--mono);
+    font-size: 10px;
+    color: var(--muted);
+    min-width: 16px;
+    flex-shrink: 0;
+  }
+
+  .step-t { color: var(--text); }
+  .step-d { font-size: 11px; color: var(--muted); margin-top: 1px; }
+
+  .pipe-tags { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 12px; }
+  .ptag {
+    font-family: var(--mono);
+    font-size: 10px;
+    padding: 3px 8px;
+    border-radius: 4px;
+    border: 1px solid var(--border2);
+    color: var(--muted);
+  }
+
+  /* ── FIVETRAN HIGHLIGHT ── */
+  .fivetran-box {
+    background: var(--surface);
+    border: 1px solid var(--border2);
+    border-radius: 14px;
+    padding: 28px 32px;
+    position: relative;
+    overflow: hidden;
+  }
+
+  .fivetran-box::before {
+    content: '';
+    position: absolute;
+    top: 0; left: 0; right: 0;
+    height: 3px;
+    background: linear-gradient(90deg, #1d4ed8, #0f766e);
+  }
+
+  .fivetran-box h3 {
+    font-family: var(--serif);
+    font-size: 1.3rem;
+    font-weight: 400;
+    margin-bottom: 12px;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+  }
+
+  .setup-badge {
+    font-family: var(--mono);
+    font-size: 10px;
+    background: #eff6ff;
+    border: 1px solid #bfdbfe;
+    color: var(--accent);
+    padding: 2px 8px;
+    border-radius: 3px;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+  }
+
+  .connector-grid {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 12px;
+    margin-top: 20px;
+  }
+  @media (max-width: 520px) { .connector-grid { grid-template-columns: 1fr; } }
+
+  .connector {
+    border: 1px solid var(--border2);
+    border-radius: 10px;
+    padding: 14px 16px;
+    background: var(--surface2);
+  }
+
+  .conn-name { font-size: 13px; font-weight: 600; margin-bottom: 4px; }
+  .conn-detail { font-size: 11px; color: var(--muted); line-height: 1.6; }
+
+  /* ── NAME MAPPING HIGHLIGHT ── */
+  .mapping-box {
+    background: var(--surface);
+    border: 1px solid var(--border2);
+    border-radius: 14px;
+    padding: 28px 32px;
+    margin-top: 20px;
+  }
+
+  .mapping-box h3 {
+    font-family: var(--serif);
+    font-size: 1.3rem;
+    font-weight: 400;
+    margin-bottom: 10px;
+  }
+
+  .mapping-example {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    margin-top: 16px;
+  }
+
+  .map-row {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    font-size: 12px;
+  }
+
+  .map-from {
+    font-family: var(--mono);
+    font-size: 11px;
+    padding: 5px 12px;
+    background: #fff1f2;
+    border: 1px solid #fecdd3;
+    color: var(--red);
+    border-radius: 5px;
+    min-width: 220px;
+  }
+
+  .map-arrow { color: var(--muted); font-size: 14px; flex-shrink: 0; }
+
+  .map-to {
+    font-family: var(--mono);
+    font-size: 11px;
+    padding: 5px 12px;
+    background: #f0fdfa;
+    border: 1px solid #99f6e4;
+    color: var(--accent2);
+    border-radius: 5px;
+    min-width: 200px;
+  }
+
+  .map-note { font-size: 11px; color: var(--muted); margin-top: 10px; font-style: italic; }
+
+  /* ── CODE BLOCK ── */
+  .code-block {
+    background: #1a1814;
+    border-radius: 10px;
+    overflow: hidden;
+    margin: 20px 0;
+  }
+
+  .code-bar {
+    background: #252118;
+    padding: 10px 16px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-family: var(--mono);
+    font-size: 11px;
+    color: #8a8278;
+    border-bottom: 1px solid rgba(255,255,255,0.06);
+  }
+
+  .cb-dot { width: 9px; height: 9px; border-radius: 50%; }
+
+  pre {
+    font-family: var(--mono);
+    font-size: 12px;
+    padding: 20px;
+    overflow-x: auto;
+    line-height: 1.75;
+    color: #d4cfc7;
+  }
+
+  .kw { color: #f87171; }
+  .fn { color: #c4b5fd; }
+  .str { color: #86efac; }
+  .cm { color: #6b6660; font-style: italic; }
+  .num { color: #93c5fd; }
+  .var { color: #fcd34d; }
+
+  /* ── TECH STACK ── */
+  .stack-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+    gap: 10px;
+  }
+
+  .stack-item {
+    background: var(--surface);
+    border: 1px solid var(--border2);
+    border-radius: 8px;
+    padding: 12px 14px;
+    transition: border-color 0.15s;
+  }
+  .stack-item:hover { border-color: rgba(0,0,0,0.25); }
+
+  .stack-name { font-size: 13px; font-weight: 600; margin-bottom: 2px; }
+  .stack-role { font-size: 11px; color: var(--muted); }
+
+  /* ── CHALLENGES ── */
+  .challenge-list { display: flex; flex-direction: column; gap: 14px; }
+
+  .challenge {
+    background: var(--surface);
+    border: 1px solid var(--border2);
+    border-radius: 10px;
+    padding: 18px 22px;
+    display: flex;
+    gap: 16px;
+  }
+
+  .ch-num {
+    font-family: var(--mono);
+    font-size: 18px;
+    font-weight: 600;
+    color: var(--border2);
+    min-width: 32px;
+    flex-shrink: 0;
+    line-height: 1.4;
+  }
+
+  .ch-title { font-size: 13px; font-weight: 600; margin-bottom: 5px; }
+  .ch-desc { font-size: 12px; color: var(--muted); line-height: 1.7; }
+
+  /* ── FOOTER ── */
+  footer {
+    padding: 48px 0;
+    text-align: center;
+    color: var(--muted);
+    font-size: 13px;
+    font-family: var(--mono);
+  }
+
+  .divider { border: none; border-top: 1px solid var(--border); margin: 24px 0; }
+
+  @media (max-width: 640px) {
+    .kpi-row { flex-direction: column; }
+    .kpi { border-right: none; border-bottom: 1px solid var(--border2); }
+    .kpi:last-child { border-bottom: none; }
+    .arch-wrap { padding: 20px; }
+  }
+</style>
+</head>
+<body>
+
+<div class="wrap">
+
+  <!-- ── HEADER ── -->
+  <header>
+    <div class="eyebrow">Data Engineering · ETL · Analytics</div>
+    <h1>Clinic <em>Analytics</em><br>Pipeline</h1>
+    <p class="hero-sub">
+      A unified data warehouse for a 50+ clinic dental chain — consolidating Google Ads, Facebook Ads, 
+      QuickBooks, patient records, and operational targets into a single PostgreSQL database 
+      on Azure, powering cross-clinic analytics dashboards.
+    </p>
+
+    <div class="kpi-row">
+      <div class="kpi">
+        <span class="kpi-n"><span>50</span>+</span>
+        <div class="kpi-l">Clinics unified</div>
+      </div>
+      <div class="kpi">
+        <span class="kpi-n"><span>4</span></span>
+        <div class="kpi-l">ETL pipelines</div>
+      </div>
+      <div class="kpi">
+        <span class="kpi-n"><span>3</span></span>
+        <div class="kpi-l">Fivetran connectors</div>
+      </div>
+      <div class="kpi">
+        <span class="kpi-n"><span>1</span></span>
+        <div class="kpi-l">Warehouse · Azure PG</div>
+      </div>
+    </div>
+  </header>
+
+  <!-- ── ARCHITECTURE ── -->
+  <section>
+    <div class="section-num">01 — Architecture</div>
+    <h2>System overview</h2>
+    <p class="section-desc">Five distinct data sources flowing into one PostgreSQL warehouse, with a shared clinic name mapping layer ensuring consistency across all of them.</p>
+
+    <div class="arch-wrap">
+      <div class="arch-title">Data flow — source → warehouse → dashboards</div>
+
+      <!-- Sources -->
+      <div class="layer">
+        <div class="layer-label">Sources</div>
+        <div class="source-nodes">
+          <div class="node node-blue">Google Ads</div>
+          <div class="node node-blue">Facebook Ads</div>
+          <div class="node node-amber">QuickBooks</div>
+          <div class="node node-teal">Akitu API</div>
+          <div class="node node-red">SecureEDMS portal</div>
+          <div class="node node-gray">Azure Blob (CSV)</div>
+        </div>
+      </div>
+
+      <!-- Ingestion -->
+      <div style="padding-left:92px;padding:8px 0 8px 92px;display:flex;gap:24px;align-items:center;font-size:12px;color:var(--muted);">
+        <span style="font-family:var(--mono);font-size:10px;">↓ Fivetran (managed)</span>
+        <span style="font-family:var(--mono);font-size:10px;">↓ requests + psycopg2</span>
+        <span style="font-family:var(--mono);font-size:10px;">↓ Selenium + pandas</span>
+        <span style="font-family:var(--mono);font-size:10px;">↓ azure-storage-blob</span>
+      </div>
+
+      <!-- Staging -->
+      <div class="layer" style="margin-top:4px;">
+        <div class="layer-label">Staging</div>
+        <div class="source-nodes">
+          <div class="node node-gray">google_ads schema</div>
+          <div class="node node-gray">facebook_ads schema</div>
+          <div class="node node-gray">public schema (EDMS)</div>
+        </div>
+      </div>
+
+      <div style="padding:6px 0 6px 92px;font-size:11px;color:var(--muted);font-family:var(--mono);">↓ incremental upsert + clinic name mapping (COALESCE)</div>
+
+      <!-- CRM -->
+      <div class="layer">
+        <div class="layer-label">Warehouse</div>
+        <div class="source-nodes">
+          <div class="node node-dark">crm_data schema — PostgreSQL on Azure</div>
+        </div>
+      </div>
+
+      <div style="padding:6px 0 6px 92px;font-size:11px;color:var(--muted);font-family:var(--mono);">↓ analytics queries</div>
+
+      <!-- Output -->
+      <div class="layer">
+        <div class="layer-label">Output</div>
+        <div class="source-nodes">
+          <div class="node node-teal">Analytics dashboards · 50+ clinics</div>
+        </div>
+      </div>
+
+    </div>
+  </section>
+
+  <!-- ── FIVETRAN ── -->
+  <section>
+    <div class="section-num">02 — Fivetran Setup</div>
+    <h2>Connector configuration</h2>
+    <p class="section-desc">Set up three Fivetran connectors from scratch — handling OAuth, schema mapping, and sync scheduling for each platform.</p>
+
+    <div class="fivetran-box">
+      <h3>
+        Fivetran managed connectors
+        <span class="setup-badge">Self-configured</span>
+      </h3>
+      <p style="font-size:13px;color:var(--muted);max-width:580px;line-height:1.7;">
+        Fivetran handles extraction and replication. The work here was configuring each connector — 
+        OAuth credentials, destination schema naming, sync frequency, and column selection — 
+        then building the incremental sync layer on top of what Fivetran lands.
+      </p>
+
+      <div class="connector-grid">
+        <div class="connector">
+          <div class="conn-name" style="color:var(--accent);">Google Ads</div>
+          <div class="conn-detail">
+            Lands to <code style="font-family:var(--mono);font-size:10px;">google_ads</code> schema.<br>
+            Tables: account_history, account_stats, campaign stats, ad group data.
+          </div>
+        </div>
+        <div class="connector">
+          <div class="conn-name" style="color:#1877f2;">Facebook Ads</div>
+          <div class="conn-detail">
+            Lands to <code style="font-family:var(--mono);font-size:10px;">facebook_ads_main</code> schema.<br>
+            Tables: account_history, basic_ad, campaign stats.
+          </div>
+        </div>
+        <div class="connector">
+          <div class="conn-name" style="color:var(--amber);">QuickBooks</div>
+          <div class="conn-detail">
+            Financial data synced to warehouse.<br>
+            Enables revenue vs. ad spend analysis per clinic.
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ── INCREMENTAL SYNC ── -->
+  <section>
+    <div class="section-num">03 — Incremental Sync Layer</div>
+    <h2>Watermark-based upserts</h2>
+    <p class="section-desc">Custom Python layer that runs on top of Fivetran-synced data — moves rows incrementally from source schemas into the CRM warehouse with conflict resolution.</p>
+
+    <div style="background:var(--surface);border:1px solid var(--border2);border-radius:14px;padding:24px 28px;margin-bottom:20px;">
+      <p style="font-size:13px;color:var(--muted);margin-bottom:16px;line-height:1.7;">
+        Each table has its own watermark column and composite primary key. The sync reads the 
+        current <code style="font-family:var(--mono);font-size:11px;">MAX(watermark)</code> from the target, 
+        then only fetches rows newer than that value — avoiding full table scans on every run.
+      </p>
+
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;" class="two-col">
+        <div style="background:var(--surface2);border:1px solid var(--border);border-radius:8px;padding:14px 16px;">
+          <div style="font-family:var(--mono);font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:0.08em;margin-bottom:8px;">Google Ads — account_stats</div>
+          <div style="font-size:12px;line-height:1.8;">
+            Conflict key: <code style="font-family:var(--mono);font-size:10px;background:var(--bg);padding:1px 5px;border-radius:3px;">customer_id, date, _fivetran_id</code><br>
+            Watermark: <code style="font-family:var(--mono);font-size:10px;background:var(--bg);padding:1px 5px;border-radius:3px;">date</code>
+          </div>
+        </div>
+        <div style="background:var(--surface2);border:1px solid var(--border);border-radius:8px;padding:14px 16px;">
+          <div style="font-family:var(--mono);font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:0.08em;margin-bottom:8px;">Facebook Ads — basic_ad</div>
+          <div style="font-size:12px;line-height:1.8;">
+            Conflict key: <code style="font-family:var(--mono);font-size:10px;background:var(--bg);padding:1px 5px;border-radius:3px;">ad_id, date, _fivetran_id</code><br>
+            Watermark: <code style="font-family:var(--mono);font-size:10px;background:var(--bg);padding:1px 5px;border-radius:3px;">date</code>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="code-block">
+      <div class="code-bar">
+        <div class="cb-dot" style="background:#ff5f57"></div>
+        <div class="cb-dot" style="background:#febc2e"></div>
+        <div class="cb-dot" style="background:#28c840"></div>
+        <span style="margin-left:8px;">incremental_ads_to_crm.py — watermark upsert</span>
+      </div>
+      <pre><span class="cm"># 1. Read current high-water mark from target table</span>
+last_wm = get_max_watermark(cur, target_schema, target_table, wm_col)
+
+<span class="cm"># 2. Only fetch rows newer than the watermark</span>
+select_query = <span class="str">f"SELECT {col_list} FROM {source_schema}.{source_table} s"</span>
+<span class="kw">if</span> last_wm:
+    select_query += <span class="str">f" WHERE s.{wm_col} > %s"</span>
+    params.append(last_wm)
+
+<span class="cm"># 3. Upsert with per-table conflict key</span>
+final_query = <span class="str">f"""
+    INSERT INTO {target_schema}.{target_table} ({col_list})
+    {select_query}
+    ON CONFLICT ({conflict_cols_sql})
+    DO NOTHING;
+"""</span>
+
+cur.execute(final_query, params)
+logger.info(<span class="str">"Rows inserted: %d"</span>, cur.rowcount)</pre>
+    </div>
+  </section>
+
+  <!-- ── CLINIC NAME MAPPING ── -->
+  <section>
+    <div class="section-num">04 — Data Quality</div>
+    <h2>Clinic name mapping layer</h2>
+    <p class="section-desc">The same clinic appears under different names across Google Ads, Facebook Ads, and internal systems. Built a shared mapping table that normalises names at load time across all pipelines.</p>
+
+    <div class="mapping-box">
+      <h3>The problem across 50+ clinics</h3>
+      <p style="font-size:13px;color:var(--muted);margin-bottom:16px;line-height:1.7;">
+        A single clinic might appear as <em>"67th Street Dental"</em> in Google Ads, 
+        <em>"67th St Dental - NYC"</em> on Facebook, and <em>"67 Street Dental Care"</em> 
+        in the internal EDMS system. Without normalisation, dashboards show them as three separate clinics.
+      </p>
+
+      <div class="mapping-example">
+        <div class="map-row">
+          <div class="map-from">67th Street Dental (Google)</div>
+          <div class="map-arrow">→</div>
+          <div class="map-to">67th Street Dental</div>
+        </div>
+        <div class="map-row">
+          <div class="map-from">67th St Dental - NYC (Facebook)</div>
+          <div class="map-arrow">→</div>
+          <div class="map-to">67th Street Dental</div>
+        </div>
+        <div class="map-row">
+          <div class="map-from">67 Street Dental Care (EDMS)</div>
+          <div class="map-arrow">→</div>
+          <div class="map-to">67th Street Dental</div>
+        </div>
+      </div>
+
+      <p class="map-note">crm_data.fb_google_clinics_mapping — referenced by all four pipelines via LEFT JOIN + COALESCE(m.new_name, s.original_name)</p>
+    </div>
+
+    <div class="code-block" style="margin-top:20px;">
+      <div class="code-bar">
+        <div class="cb-dot" style="background:#ff5f57"></div>
+        <div class="cb-dot" style="background:#febc2e"></div>
+        <div class="cb-dot" style="background:#28c840"></div>
+        <span style="margin-left:8px;">Name mapping — used across all pipelines</span>
+      </div>
+      <pre><span class="cm">-- Pattern used in every pipeline that touches clinic names</span>
+<span class="cm">-- If mapping exists → use canonical name. If not → keep original.</span>
+SELECT
+    <span class="fn">COALESCE</span>(m.new_name, s.clinic_name) <span class="kw">AS</span> clinic,
+    s.metric_1,
+    s.metric_2
+<span class="kw">FROM</span> source_table s
+<span class="kw">LEFT JOIN</span> crm_data.fb_google_clinics_mapping m
+    <span class="kw">ON</span> m.old_name = s.clinic_name;</pre>
+    </div>
+  </section>
+
+  <!-- ── 4 PIPELINES ── -->
+  <section>
+    <div class="section-num">05 — Pipelines</div>
+    <h2>Four ETL pipelines</h2>
+    <p class="section-desc">Each pipeline handles a different source with its own extraction strategy.</p>
+
+    <div class="pipeline-grid">
+
+      <!-- Ads incremental -->
+      <div class="pipe-card">
+        <div class="pipe-header">
+          <div class="pipe-icon" style="background:#eff6ff;">📊</div>
+          <div>
+            <div class="pipe-name">Ads Incremental Sync</div>
+            <div class="pipe-sub">Google Ads + Facebook Ads → crm_data</div>
+          </div>
+        </div>
+        <div class="pipe-body">
+          <div class="flow-steps">
+            <div class="flow-step">
+              <div class="step-n">01</div>
+              <div><div class="step-t">Read MAX watermark from target</div></div>
+            </div>
+            <div class="flow-step">
+              <div class="step-n">02</div>
+              <div><div class="step-t">SELECT rows newer than watermark</div></div>
+            </div>
+            <div class="flow-step">
+              <div class="step-n">03</div>
+              <div><div class="step-t">JOIN clinic mapping on descriptive_name</div></div>
+            </div>
+            <div class="flow-step">
+              <div class="step-n">04</div>
+              <div><div class="step-t">INSERT … ON CONFLICT DO NOTHING</div></div>
+            </div>
+          </div>
+          <div class="pipe-tags">
+            <span class="ptag">psycopg2</span>
+            <span class="ptag">watermark</span>
+            <span class="ptag">upsert</span>
+            <span class="ptag">incremental</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- Akitu API -->
+      <div class="pipe-card">
+        <div class="pipe-header">
+          <div class="pipe-icon" style="background:#f0fdfa;">🏥</div>
+          <div>
+            <div class="pipe-name">Patient Attrition API</div>
+            <div class="pipe-sub">Akitu API → crm_data daily</div>
+          </div>
+        </div>
+        <div class="pipe-body">
+          <div class="flow-steps">
+            <div class="flow-step">
+              <div class="step-n">01</div>
+              <div><div class="step-t">Login to Akitu API (session auth)</div></div>
+            </div>
+            <div class="flow-step">
+              <div class="step-n">02</div>
+              <div><div class="step-t">POST attrition report (today's date range)</div></div>
+            </div>
+            <div class="flow-step">
+              <div class="step-n">03</div>
+              <div><div class="step-t">Extract new_patients, lost_patients</div></div>
+            </div>
+            <div class="flow-step">
+              <div class="step-n">04</div>
+              <div><div class="step-t">Upsert to Postgres (date as PK)</div></div>
+            </div>
+          </div>
+          <div class="pipe-tags">
+            <span class="ptag">requests</span>
+            <span class="ptag">session auth</span>
+            <span class="ptag">daily upsert</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- Azure Blob -->
+      <div class="pipe-card">
+        <div class="pipe-header">
+          <div class="pipe-icon" style="background:#fffbeb;">☁️</div>
+          <div>
+            <div class="pipe-name">Azure Blob CSV ETL</div>
+            <div class="pipe-sub">Blob Storage → crm_data + archive</div>
+          </div>
+        </div>
+        <div class="pipe-body">
+          <div class="flow-steps">
+            <div class="flow-step">
+              <div class="step-n">01</div>
+              <div><div class="step-t">List blobs, skip archive/ prefix</div></div>
+            </div>
+            <div class="flow-step">
+              <div class="step-n">02</div>
+              <div><div class="step-t">Fuzzy column mapping (find_col)</div></div>
+            </div>
+            <div class="flow-step">
+              <div class="step-n">03</div>
+              <div><div class="step-t">Batch insert via execute_values</div></div>
+            </div>
+            <div class="flow-step">
+              <div class="step-n">04</div>
+              <div><div class="step-t">Copy to archive/, verify, delete source</div></div>
+            </div>
+          </div>
+          <div class="pipe-tags">
+            <span class="ptag">azure-storage-blob</span>
+            <span class="ptag">csv</span>
+            <span class="ptag">archive pattern</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- EDMS Scraper -->
+      <div class="pipe-card">
+        <div class="pipe-header">
+          <div class="pipe-icon" style="background:#fff1f2;">🦷</div>
+          <div>
+            <div class="pipe-name">EDMS Patient ETL</div>
+            <div class="pipe-sub">SecureEDMS portal → staging → prod</div>
+          </div>
+        </div>
+        <div class="pipe-body">
+          <div class="flow-steps">
+            <div class="flow-step">
+              <div class="step-n">01</div>
+              <div><div class="step-t">Selenium login + report navigation</div></div>
+            </div>
+            <div class="flow-step">
+              <div class="step-n">02</div>
+              <div><div class="step-t">Set date range, trigger Excel export</div></div>
+            </div>
+            <div class="flow-step">
+              <div class="step-n">03</div>
+              <div><div class="step-t">pandas clean + type coerce</div></div>
+            </div>
+            <div class="flow-step">
+              <div class="step-n">04</div>
+              <div><div class="step-t">Load staging → transfer to prod + mapping</div></div>
+            </div>
+          </div>
+          <div class="pipe-tags">
+            <span class="ptag">selenium</span>
+            <span class="ptag">pandas</span>
+            <span class="ptag">staging pattern</span>
+            <span class="ptag">name mapping</span>
+          </div>
+        </div>
+      </div>
+
+    </div>
+  </section>
+
+  <!-- ── TECH STACK ── -->
+  <section>
+    <div class="section-num">06 — Stack</div>
+    <h2>Technologies</h2>
+    <p class="section-desc">All Python, running against a PostgreSQL 14 instance on Azure Database.</p>
+
+    <div class="stack-grid">
+      <div class="stack-item">
+        <div class="stack-name" style="color:var(--accent);">Fivetran</div>
+        <div class="stack-role">Managed ETL connectors</div>
+      </div>
+      <div class="stack-item">
+        <div class="stack-name">PostgreSQL</div>
+        <div class="stack-role">Azure Database warehouse</div>
+      </div>
+      <div class="stack-item">
+        <div class="stack-name">psycopg2</div>
+        <div class="stack-role">Postgres driver + upserts</div>
+      </div>
+      <div class="stack-item">
+        <div class="stack-name" style="color:var(--accent2);">pandas</div>
+        <div class="stack-role">Transform + type coercion</div>
+      </div>
+      <div class="stack-item">
+        <div class="stack-name">Selenium</div>
+        <div class="stack-role">Portal scraping (EDMS)</div>
+      </div>
+      <div class="stack-item">
+        <div class="stack-name">requests</div>
+        <div class="stack-role">API ingestion (Akitu)</div>
+      </div>
+      <div class="stack-item">
+        <div class="stack-name" style="color:var(--amber);">azure-storage-blob</div>
+        <div class="stack-role">Blob CSV ingestion</div>
+      </div>
+      <div class="stack-item">
+        <div class="stack-name">logging</div>
+        <div class="stack-role">Structured log + file output</div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ── CHALLENGES ── -->
+  <section>
+    <div class="section-num">07 — Engineering notes</div>
+    <h2>Problems solved</h2>
+
+    <div class="challenge-list">
+      <div class="challenge">
+        <div class="ch-num">01</div>
+        <div>
+          <div class="ch-title">Same clinic, five different names</div>
+          <div class="ch-desc">Google Ads, Facebook Ads, QuickBooks, the EDMS portal, and the CSV target files all used slightly different names for the same physical clinic. Without normalisation, dashboards would fragment each clinic into multiple entries. Built a shared <code style="font-family:var(--mono);font-size:10px;">fb_google_clinics_mapping</code> table and applied it via LEFT JOIN + COALESCE at load time in every pipeline that touches clinic names.</div>
+        </div>
+      </div>
+      <div class="challenge">
+        <div class="ch-num">02</div>
+        <div>
+          <div class="ch-title">Full re-load vs incremental — each table is different</div>
+          <div class="ch-desc">Different tables have different primary keys and watermark columns. Account history uses <code style="font-family:var(--mono);font-size:10px;">(id, _fivetran_start)</code>, stats tables use <code style="font-family:var(--mono);font-size:10px;">(customer_id, date, _fivetran_id)</code>. Each table entry in the config carries its own conflict_cols and watermark_col, so the generic upsert function handles all cases correctly without hardcoding.</div>
+        </div>
+      </div>
+      <div class="challenge">
+        <div class="ch-num">03</div>
+        <div>
+          <div class="ch-title">CSV column headers were inconsistent across clinics</div>
+          <div class="ch-desc">Target/goal CSVs uploaded to Azure Blob used different column names per clinic — "annual", "annual_target", "year_target" all meant the same thing. Built a <code style="font-family:var(--mono);font-size:10px;">find_col(possible_names)</code> function that searches the header row for any matching alias, making the loader tolerant of naming variations without manual preprocessing.</div>
+        </div>
+      </div>
+      <div class="challenge">
+        <div class="ch-num">04</div>
+        <div>
+          <div class="ch-title">EDMS portal has no API — modal-based date picker</div>
+          <div class="ch-desc">SecureEDMS exposes reports only through a web portal with a JavaScript modal containing date inputs. Standard Selenium sends weren't registering because the inputs needed both DOM value injection and JS event dispatch. Solved with a <code style="font-family:var(--mono);font-size:10px;">js_set()</code> helper that fires input, change, and blur events after setting the value, plus iframe context switching for the modal.</div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <footer>
+    <p>clinic-analytics-pipeline · Python · PostgreSQL · Azure · Fivetran</p>
+    <p style="margin-top:6px;font-size:11px;">All credentials removed. Built for a 50+ clinic dental chain.</p>
+  </footer>
+
+</div>
+
+<style>
+@media (max-width: 520px) {
+  .two-col { grid-template-columns: 1fr !important; }
+}
+</style>
+
+</body>
+</html>
