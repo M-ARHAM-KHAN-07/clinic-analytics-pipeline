@@ -1,0 +1,462 @@
+import os
+import time
+import traceback
+from datetime import datetime
+import pandas as pd
+import psycopg2
+import psycopg2.extras
+from selenium import webdriver
+from selenium.webdriver.common.by import By
+from selenium.webdriver.support.ui import WebDriverWait, Select
+from selenium.webdriver.support import expected_conditions as EC
+from selenium.webdriver.chrome.options import Options
+from selenium.webdriver.chrome.service import Service
+from webdriver_manager.chrome import ChromeDriverManager
+from selenium.webdriver.common.keys import Keys
+
+
+# --- SCRAPING CONFIG ---
+# DOWNLOAD_DIR = r""
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+DOWNLOAD_DIR = os.path.join(BASE_DIR, "staging")
+
+
+
+CORP, USER, PASS = "", "", ""
+CLINIC_MATCH_FRAGMENT = ""
+REPORT_NAME = ""
+START_DATE = ""
+END_DATE   = ""
+MAX_DOWNLOAD_WAIT_SEC = 180
+
+# --- DATABASE CONFIG ---
+DB_USER = ""
+DB_PASS = ""
+DB_HOST = ""
+DB_PORT = ""
+DB_NAME = ""
+
+# Schemas
+STAGING_SCHEMA = ''
+PROD_SCHEMA = ''
+TABLE_NAME = ''
+MAPPING_TABLE = ''
+BATCH_SIZE = 1000
+
+
+def get_db_connection():
+    """Create a psycopg2 connection."""
+    return psycopg2.connect(
+        host=DB_HOST,
+        dbname=DB_NAME,
+        user=DB_USER,
+        password=DB_PASS,
+        port=DB_PORT,
+        sslmode="require",
+    )
+
+def clean_data(df):
+    print("   [Transform] Cleaning data...")
+
+    # Date columns
+    date_cols = ['DOB', 'Visit Date', 'Next Appt Date']
+    for col in date_cols:
+        if col in df.columns:
+            df[col] = pd.to_datetime(df[col], errors="coerce").dt.date
+
+    # Numeric columns (remove currency symbols)
+    numeric_cols = ['First Revenue', 'Future Production']
+    for col in numeric_cols:
+        if col in df.columns:
+            df[col] = (
+                df[col]
+                .astype(str)
+                .str.replace("$", "", regex=False)
+                .str.replace(",", "", regex=False)
+            )
+            df[col] = pd.to_numeric(df[col], errors="coerce").fillna(0)
+
+    # Standardize column names
+    df.columns = [
+        c.strip().lower().replace(" ", "_").replace("-", "_")
+        for c in df.columns
+    ]
+
+    df = df.rename(columns={
+        "patient": "patient_name",
+        "orig_pat_id": "original_patient_id"
+    })
+    return df
+
+def ensure_tables_exist(conn):
+    """
+    Ensures both the Public (Staging) and CRM_DATA (Production) tables exist
+    with identical structures.
+    """
+    # Define the table structure string to avoid repetition
+    table_structure = """
+        id SERIAL PRIMARY KEY,
+        clinic VARCHAR(255),
+        new_pat_id VARCHAR(50),
+        original_patient_id VARCHAR(50),
+        patient_name VARCHAR(255),
+        dob DATE,
+        address TEXT,
+        phone VARCHAR(50),
+        visit_date DATE,
+        referral_source VARCHAR(255),
+        first_revenue NUMERIC(10, 2),
+        provider VARCHAR(255),
+        next_appt_date DATE,
+        future_provider VARCHAR(255),
+        future_production NUMERIC(10, 2),
+        imported_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    """
+
+    with conn.cursor() as cur:
+        # 1. Create Staging Schema & Table
+        cur.execute(f"CREATE SCHEMA IF NOT EXISTS {STAGING_SCHEMA};")
+        cur.execute(f"""
+            CREATE TABLE IF NOT EXISTS {STAGING_SCHEMA}.{TABLE_NAME} (
+                {table_structure}
+            );
+        """)
+
+        # 2. Create Production Schema & Table
+        cur.execute(f"CREATE SCHEMA IF NOT EXISTS {PROD_SCHEMA};")
+        cur.execute(f"""
+            CREATE TABLE IF NOT EXISTS {PROD_SCHEMA}.{TABLE_NAME} (
+                {table_structure}
+            );
+        """)
+        
+        conn.commit()
+
+def load_staging_data(df):
+    """
+    Loads data into the PUBLIC (Staging) schema.
+    """
+    try:
+        conn = get_db_connection()
+        print("   [Load] Connected to database.")
+        
+        ensure_tables_exist(conn)
+        
+        # Exclude ID and IMPORTED_AT (DB handles these)
+        EXCLUDE_COLS = ['id', 'imported_at']
+        columns_to_insert = [col for col in df.columns if col not in EXCLUDE_COLS]
+        df_insert = df[columns_to_insert]
+        
+        # Prepare Data
+        rows = df_insert.where(pd.notnull(df_insert), None).to_dict("records")
+        if not rows:
+            print("   [Load] No data to insert.")
+            return
+
+        col_names = ", ".join(columns_to_insert)
+        data_tuples = [tuple(row[col] for col in columns_to_insert) for row in rows]
+
+        insert_sql = f"INSERT INTO {STAGING_SCHEMA}.{TABLE_NAME} ({col_names}) VALUES %s"
+
+        with conn.cursor() as cur:
+            # First, ensure staging is clean before loading (optional, but good practice)
+            # cur.execute(f"TRUNCATE TABLE {STAGING_SCHEMA}.{TABLE_NAME}") 
+            
+            total_inserted = 0
+            for i in range(0, len(data_tuples), BATCH_SIZE):
+                batch = data_tuples[i:i + BATCH_SIZE]
+                psycopg2.extras.execute_values(cur, insert_sql, batch, page_size=BATCH_SIZE)
+                total_inserted += len(batch)
+                print(f"   [Load - Staging] Inserted {total_inserted}/{len(data_tuples)} rows...")
+            conn.commit()
+            
+        print(f"✔ [Success] Loaded {total_inserted} rows into Staging ({STAGING_SCHEMA}).")
+        conn.close()
+    except Exception as e:
+        print(f"❌ [DB Load Error] {e}")
+        raise e
+
+def transfer_staging_to_prod():
+    """
+    1. Reads from PUBLIC.new_patients
+    2. Joins with CRM_DATA.ads_name_mapping to fix clinic names
+    3. Inserts into CRM_DATA.new_patients
+    4. Truncates PUBLIC.new_patients
+    """
+    print("   [Transfer] Moving data from Staging to Production with Mapping...")
+    
+    # List columns to transfer (excluding ID to let Prod generate its own sequence)
+    # Note: We must explicitly list these to align the INSERT with the SELECT
+    cols = [
+        "clinic", "new_pat_id", "original_patient_id", "patient_name", 
+        "dob", "address", "phone", "visit_date", "referral_source", 
+        "first_revenue", "provider", "next_appt_date", "future_provider", 
+        "future_production", "imported_at"
+    ]
+    cols_str = ", ".join(cols)
+
+    # The SQL logic:
+    # We select all columns from Staging (s).
+    # For the 'clinic' column, we check the Mapping table (m).
+    # If a mapping exists, use m.new_name. If not (COALESCE), stick with s.clinic.
+    transfer_sql = f"""
+    INSERT INTO {PROD_SCHEMA}.{TABLE_NAME} ({cols_str})
+    SELECT 
+        COALESCE(m.new_name, s.clinic) as clinic,
+        s.new_pat_id, 
+        s.original_patient_id, 
+        s.patient_name, 
+        s.dob, 
+        s.address, 
+        s.phone, 
+        s.visit_date, 
+        s.referral_source, 
+        s.first_revenue, 
+        s.provider, 
+        s.next_appt_date, 
+        s.future_provider, 
+        s.future_production, 
+        s.imported_at
+    FROM {STAGING_SCHEMA}.{TABLE_NAME} s
+    LEFT JOIN {PROD_SCHEMA}.{MAPPING_TABLE} m ON s.clinic = m.old_name;
+    """
+
+    truncate_sql = f"TRUNCATE TABLE {STAGING_SCHEMA}.{TABLE_NAME};"
+
+    try:
+        conn = get_db_connection()
+        with conn.cursor() as cur:
+            # 1. Transfer
+            cur.execute(transfer_sql)
+            row_count = cur.rowcount
+            print(f"   [Transfer] Transferred {row_count} rows to {PROD_SCHEMA}.{TABLE_NAME}.")
+
+            # 2. Truncate Staging
+            cur.execute(truncate_sql)
+            print(f"   [Transfer] Staging table {STAGING_SCHEMA}.{TABLE_NAME} truncated.")
+        
+        conn.commit()
+        print("✔ [Success] Data transfer and mapping complete.")
+        conn.close()
+    except Exception as e:
+        print(f"❌ [DB Transfer Error] {e}")
+        raise e
+
+
+def shot(driver, name):
+    p = os.path.join(DOWNLOAD_DIR, f"{name.replace(' ','_')}.png")
+    try: driver.save_screenshot(p)
+    except: pass
+
+def js_set(driver, el, value):
+    driver.execute_script("""
+        const el = arguments[0], v = arguments[1];
+        el.value = v;
+        el.dispatchEvent(new Event('input', {bubbles:true}));
+        el.dispatchEvent(new Event('change', {bubbles:true}));
+        el.dispatchEvent(new Event('blur', {bubbles:true}));
+    """, el, value)
+
+def wait_for_download(folder, timeout=120):
+    print("   [Extract] Waiting for file download...")
+    t0 = time.time()
+    while time.time() - t0 < timeout:
+        if any(n.endswith(".crdownload") for n in os.listdir(folder)):
+            time.sleep(0.8); continue
+        xs = [n for n in os.listdir(folder) if n.lower().endswith((".xlsx",".xls"))]
+        if xs:
+            xs.sort(key=lambda n: os.path.getctime(os.path.join(folder, n)))
+            return os.path.join(folder, xs[-1])
+        time.sleep(0.8)
+    return None
+def clean_download_dir(download_dir):
+    for f in os.listdir(download_dir):
+        try:
+            os.remove(os.path.join(download_dir, f))
+        except:
+            pass
+
+def switch_to_modal_context(driver, wait):
+    driver.switch_to.default_content()
+    # Try default DOM
+    try:
+        modal = wait.until(EC.presence_of_element_located((
+            By.XPATH, "//*[contains(normalize-space(),'Report Range') and (self::div or self::span or self::h2)]/ancestor::*[contains(@class,'modal') or contains(@class,'dialog') or self::div][1]"
+        )))
+        return modal
+    except: pass
+    
+    # Try Iframes
+    iframes = driver.find_elements(By.TAG_NAME, "iframe")
+    for fr in iframes:
+        try:
+            driver.switch_to.default_content()
+            driver.switch_to.frame(fr)
+            modal = WebDriverWait(driver, 3).until(EC.presence_of_element_located((
+                By.XPATH, "//*[contains(normalize-space(),'Report Range') and (self::div or self::span or self::h2)]/ancestor::*[contains(@class,'modal') or contains(@class,'dialog') or self::div][1]"
+            )))
+            return modal
+        except: continue
+    
+    # Fallback
+    driver.switch_to.default_content()
+    return wait.until(EC.presence_of_element_located((By.XPATH, "//*[contains(normalize-space(),'Report Range')]/ancestor::*[self::div][1]")))
+
+def perform_scraping():
+    """Executes the Selenium logic and returns the path of the downloaded file."""
+    os.makedirs(DOWNLOAD_DIR, exist_ok=True)
+    clean_download_dir(DOWNLOAD_DIR)
+    opts = Options()
+    opts.add_experimental_option("prefs", {
+        "download.default_directory": DOWNLOAD_DIR,
+        "download.prompt_for_download": False,
+        "download.directory_upgrade": True,
+        "safebrowsing.enabled": True
+    })
+    opts.add_argument("--no-sandbox")
+    opts.add_argument("--disable-dev-shm-usage")
+    # opts.add_argument("--headless=new") 
+
+    driver = webdriver.Chrome(service=Service(ChromeDriverManager().install()), options=opts)
+    wait = WebDriverWait(driver, 25)
+
+    try:
+        print("--- STARTING EXTRACTION (SCRAPING) ---")
+        driver.get("https://www.secureedms.com/")
+        
+        # 1. Login
+        wait.until(EC.presence_of_element_located((By.XPATH, "//input[contains(@name, 'corp') or contains(@placeholder,'Corp')]"))).send_keys(CORP)
+        wait.until(EC.presence_of_element_located((By.XPATH, "//input[@name='username' or contains(@placeholder,'User')]"))).send_keys(USER)
+        wait.until(EC.presence_of_element_located((By.XPATH, "//input[@type='password']"))).send_keys(PASS)
+        wait.until(EC.element_to_be_clickable((By.XPATH, "//input[@type='submit' or @value='Submit' or @name='submit' or @id='submit']"))).click()
+        print("   [Extract] Logged in")
+
+        # 2. Pick Clinic
+        try:
+            sel_element = wait.until(EC.presence_of_element_located((By.XPATH, "//select")))
+            WebDriverWait(driver, 10).until(lambda d: len(Select(sel_element).options) > 0)
+
+            if sel_element.is_displayed():
+                S = Select(sel_element)
+                options = [o.text.strip() for o in S.options]
+                idx = next((i for i, t in enumerate(options) if CLINIC_MATCH_FRAGMENT.lower() in t.lower()), None)
+                if idx is None: idx = next((i for i, t in enumerate(options) if t and "select" not in t.lower()), 0)
+                
+                if len(options) > 0:
+                    S.select_by_index(idx)
+                    print(f"   [Extract] Clinic selected: {options[idx]}")
+                    try: sel_element.find_element(By.XPATH, ".//following::input[@type='submit'][1]").click()
+                    except: wait.until(EC.element_to_be_clickable((By.XPATH, "//input[@type='submit']"))).click()
+        except Exception as e:
+            print(f"   [Extract] Clinic selection info: {e}")
+
+        # 3. Navigate to Reports
+        try: wait.until(EC.element_to_be_clickable((By.XPATH, "//a[contains(.,'Reports')] | //span[contains(.,'Reports')]"))).click()
+        except: pass
+        wait.until(EC.element_to_be_clickable((By.XPATH, "//*[contains(text(),'Corporate Reports')]"))).click()
+        
+        wait.until(EC.element_to_be_clickable((By.XPATH, f"//a[normalize-space()='{REPORT_NAME}'] | //*[@onclick and normalize-space(text())='{REPORT_NAME}']"))).click()
+        print(f"   [Extract] Opened Report: {REPORT_NAME}")
+
+        # 4. Handle Modal
+        modal = switch_to_modal_context(driver, wait)
+        time.sleep(2) # Give the modal time to visually fade in
+        
+        # A. Fill Dates
+        inputs = modal.find_elements(By.XPATH, ".//input[@type='text' or not(@type)]")
+        if len(inputs) >= 2:
+            start_inp, end_inp = inputs[0], inputs[1]
+            for inp, date_val in [(start_inp, START_DATE), (end_inp, END_DATE)]:
+                inp.click(); inp.send_keys(Keys.CONTROL, 'a'); inp.send_keys(Keys.DELETE)
+                inp.send_keys(date_val); inp.send_keys(Keys.TAB); time.sleep(0.2)
+                js_set(driver, inp, date_val); inp.send_keys(Keys.ESCAPE)
+            print("   [Extract] Dates set")
+        else:
+            print("   [Extract Warning] Could not find date inputs, attempting to proceed...")
+
+        # B. Select Excel (Robust Method)
+        clicked_excel = False
+        xpaths_to_try = [
+            ".//input[@type='radio' and (contains(@value,'Excel') or contains(@value,'xls') or contains(@value,'XLS'))]",
+            ".//label[contains(.,'Excel')]",
+            ".//*[contains(text(),'Excel') and (self::label or self::span or self::div)]"
+        ]
+        
+        for xpath in xpaths_to_try:
+            try:
+                elem = modal.find_element(By.XPATH, xpath)
+                driver.execute_script("arguments[0].scrollIntoView({block:'center'});", elem)
+                elem.click()
+                print(f"   [Extract] Selected Excel using xpath: {xpath}")
+                clicked_excel = True
+                break
+            except:
+                continue
+        
+        if not clicked_excel:
+            print("   [Extract Warning] Could not find 'Excel' option. It might be default or hidden.")
+
+        # C. Click Done
+        try:
+            done_btn = modal.find_element(By.XPATH, ".//button[normalize-space()='Done'] | .//input[@value='Done']")
+            driver.execute_script("arguments[0].scrollIntoView({block:'center'});", done_btn)
+            done_btn.click()
+            print("   [Extract] Clicked Done")
+        except:
+             # Fallback
+             if len(inputs) >= 2: inputs[1].send_keys(Keys.ENTER)
+             print("   [Extract] Could not find Done button, sent ENTER key.")
+
+        # 5. Wait for file
+        driver.switch_to.default_content()
+        file_path = wait_for_download(DOWNLOAD_DIR, MAX_DOWNLOAD_WAIT_SEC)
+        
+        return file_path
+
+    except Exception as e:
+        print(f"   [Extract Error] {e}")
+        shot(driver, "scraping_error")
+        return None
+    finally:
+        driver.quit()
+
+
+def run_etl_pipeline():
+    print("==========================================")
+    print("      STARTING DENTAL LOOK PIPELINE       ")
+    print("==========================================")
+
+    # 1. EXTRACT
+    file_path = perform_scraping()
+    
+    if not file_path:
+        print("❌ Pipeline Failed: No file downloaded.")
+        return
+
+    print(f"✔ File acquired: {file_path}")
+    print("--- STARTING TRANSFORM, LOAD, & TRANSFER ---")
+
+    try:
+        # 2. TRANSFORM
+        df = pd.read_excel(file_path)
+        print(f"   [Transform] Raw data loaded: {len(df)} rows")
+        
+        df_clean = clean_data(df)
+        print(f"   [Transform] Clean data ready: {len(df_clean)} rows")
+
+        # 3. LOAD TO STAGING (PUBLIC SCHEMA)
+        load_staging_data(df_clean)
+
+        # 4. TRANSFER TO PROD (CRM_DATA SCHEMA) & MAP NAMES
+        transfer_staging_to_prod()
+
+        print("\n==========================================")
+        print("      PIPELINE COMPLETED SUCCESSFULLY     ")
+        print("==========================================")
+
+    except Exception as e:
+        print("\n❌ Pipeline Failed during Data Processing")
+        traceback.print_exc()
+
+if __name__ == "__main__":
+    run_etl_pipeline()
